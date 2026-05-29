@@ -1,0 +1,161 @@
+# =============================================================================
+# check-upstream-v2.yml — 上游更新检测与自动触发编译
+#
+# 每 6 小时检查 lede / immortalwrt master 分支新提交。
+# 若 commit 与上次记录不同，则触发 build-v2（仅编译有变化的源码源）。
+# 状态持久化：actions/cache 存储 .upstream-state.json
+# =============================================================================
+
+name: Check Upstream v2
+
+on:
+  schedule:
+    # 每 6 小时（UTC 00:00, 06:00, 12:00, 18:00）
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Force trigger build for both sources
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  STATE_FILE: .upstream-state.json
+
+jobs:
+  detect:
+    name: Detect upstream changes
+    runs-on: ubuntu-22.04
+    outputs:
+      lede_changed: ${{ steps.compare.outputs.lede_changed }}
+      immortalwrt_changed: ${{ steps.compare.outputs.immortalwrt_changed }}
+      lede_commit: ${{ steps.fetch.outputs.lede_commit }}
+      immortalwrt_commit: ${{ steps.fetch.outputs.immortalwrt_commit }}
+
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: Restore upstream state cache
+        uses: actions/cache/restore@v4
+        id: state_cache
+        with:
+          path: ${{ env.STATE_FILE }}
+          key: upstream-state-v2-${{ github.run_id }}
+          restore-keys: |
+            upstream-state-v2-
+
+      - name: Initialize state file if missing
+        shell: bash
+        run: |
+          if [[ ! -f "${{ env.STATE_FILE }}" ]]; then
+            echo '{"lede":"","immortalwrt":""}' > "${{ env.STATE_FILE }}"
+          fi
+          cat "${{ env.STATE_FILE }}"
+
+      - name: Fetch latest upstream commits
+        id: fetch
+        shell: bash
+        run: |
+          lede_commit="$(git ls-remote https://github.com/coolsnowwolf/lede.git refs/heads/master | awk '{print $1}')"
+          iwrt_commit="$(git ls-remote https://github.com/immortalwrt/immortalwrt.git refs/heads/master | awk '{print $1}')"
+          echo "lede_commit=$lede_commit" >> "$GITHUB_OUTPUT"
+          echo "immortalwrt_commit=$iwrt_commit" >> "$GITHUB_OUTPUT"
+          echo "Latest lede:         $lede_commit"
+          echo "Latest immortalwrt:  $iwrt_commit"
+
+      - name: Compare with last built commits
+        id: compare
+        shell: bash
+        run: |
+          FORCE="${{ github.event.inputs.force }}"
+          LAST_LEDE="$(python3 -c "import json; print(json.load(open('${{ env.STATE_FILE }}')).get('lede',''))")"
+          LAST_IWRT="$(python3 -c "import json; print(json.load(open('${{ env.STATE_FILE }}')).get('immortalwrt',''))")"
+          NEW_LEDE="${{ steps.fetch.outputs.lede_commit }}"
+          NEW_IWRT="${{ steps.fetch.outputs.immortalwrt_commit }}"
+
+          lede_changed=false
+          iwrt_changed=false
+
+          if [[ "$FORCE" == "true" ]]; then
+            lede_changed=true
+            iwrt_changed=true
+          else
+            [[ "$NEW_LEDE" != "$LAST_LEDE" && -n "$NEW_LEDE" ]] && lede_changed=true
+            [[ "$NEW_IWRT" != "$LAST_IWRT" && -n "$NEW_IWRT" ]] && iwrt_changed=true
+          fi
+
+          echo "lede_changed=$lede_changed" >> "$GITHUB_OUTPUT"
+          echo "immortalwrt_changed=$iwrt_changed" >> "$GITHUB_OUTPUT"
+          echo "Last lede: $LAST_LEDE -> $NEW_LEDE (changed=$lede_changed)"
+          echo "Last iwrt: $LAST_IWRT -> $NEW_IWRT (changed=$iwrt_changed)"
+
+      - name: Update state file with current commits
+        if: steps.compare.outputs.lede_changed == 'true' || steps.compare.outputs.immortalwrt_changed == 'true'
+        shell: bash
+        run: |
+          python3 - <<PY
+          import json, os
+          path = os.environ["STATE_FILE"]
+          with open(path) as f:
+              state = json.load(f)
+          if "${{ steps.compare.outputs.lede_changed }}" == "true":
+              state["lede"] = "${{ steps.fetch.outputs.lede_commit }}"
+          if "${{ steps.compare.outputs.immortalwrt_changed }}" == "true":
+              state["immortalwrt"] = "${{ steps.fetch.outputs.immortalwrt_commit }}"
+          with open(path, "w") as f:
+              json.dump(state, f, indent=2)
+          print(json.dumps(state, indent=2))
+          PY
+        env:
+          STATE_FILE: ${{ env.STATE_FILE }}
+
+      - name: Save upstream state cache
+        uses: actions/cache/save@v4
+        if: steps.compare.outputs.lede_changed == 'true' || steps.compare.outputs.immortalwrt_changed == 'true'
+        with:
+          path: ${{ env.STATE_FILE }}
+          key: upstream-state-v2-${{ github.run_id }}
+
+  trigger-lede:
+    name: Trigger lede build
+    needs: detect
+    if: needs.detect.outputs.lede_changed == 'true'
+    uses: ./.github/workflows/build-v2.yml
+    with:
+      source: lede
+      device: all
+      upload_release: false
+      upstream_commit: ${{ needs.detect.outputs.lede_commit }}
+
+  trigger-immortalwrt:
+    name: Trigger immortalwrt build
+    needs: detect
+    if: needs.detect.outputs.immortalwrt_changed == 'true'
+    uses: ./.github/workflows/build-v2.yml
+    with:
+      source: immortalwrt
+      device: all
+      upload_release: false
+      upstream_commit: ${{ needs.detect.outputs.immortalwrt_commit }}
+
+  notify:
+    name: Upstream check summary
+    needs: [detect, trigger-lede, trigger-immortalwrt]
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Summary
+        shell: bash
+        run: |
+          echo "## Upstream Check v2" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Source | Latest Commit | Changed | Triggered |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|---------------|---------|-----------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| lede | \`${{ needs.detect.outputs.lede_commit }}\` | ${{ needs.detect.outputs.lede_changed }} | ${{ needs.trigger-lede.result || 'skipped' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| immortalwrt | \`${{ needs.detect.outputs.immortalwrt_commit }}\` | ${{ needs.detect.outputs.immortalwrt_changed }} | ${{ needs.trigger-immortalwrt.result || 'skipped' }} |" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,259 @@
+# =============================================================================
+# build-v2.yml — 主固件编译工作流
+#
+# 功能：
+#   - 支持 lede / immortalwrt 双源码源
+#   - 支持单设备或 all 并行编译（矩阵最多 4 路并行）
+#   - 分层缓存：dl / feeds / ccache
+#   - 复合 Action：setup-feeds + pack-release
+#
+# 触发方式：
+#   - workflow_dispatch（手动）
+#   - workflow_call（被 check-upstream-v2 调用）
+#   - repository_dispatch（可选 API 触发）
+# =============================================================================
+
+name: Build Firmware v2
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Source tree (lede or immortalwrt)
+        required: true
+        default: lede
+        type: choice
+        options:
+          - lede
+          - immortalwrt
+      device:
+        description: Device target (all = every entry in configs/devices.list)
+        required: true
+        default: x86_64
+        type: string
+      upload_release:
+        description: Upload to GitHub Release
+        required: false
+        default: false
+        type: boolean
+      release_tag:
+        description: Release tag (when upload_release=true)
+        required: false
+        default: ""
+        type: string
+      upstream_commit:
+        description: Pin upstream commit (empty = latest master)
+        required: false
+        default: ""
+        type: string
+
+  workflow_call:
+    inputs:
+      source:
+        required: true
+        type: string
+      device:
+        required: false
+        type: string
+        default: all
+      upload_release:
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        required: false
+        type: string
+        default: ""
+      upstream_commit:
+        required: false
+        type: string
+        default: ""
+
+  repository_dispatch:
+    types: [build-firmware]
+
+# 同一 source+device 组合避免并发重复编译
+concurrency:
+  group: build-v2-${{ github.event.inputs.source || github.event.client_payload.source || 'lede' }}-${{ github.event.inputs.device || github.event.client_payload.device || 'matrix' }}
+  cancel-in-progress: false
+
+env:
+  # GitHub Actions 免费 runner 磁盘约 14GB，预留空间给编译树
+  MAX_PARALLEL: "4"
+  BUILD_TIMEOUT_MINUTES: "150"
+  # make 并行度：物理核数，避免 OOM 可下调
+  MAKE_JOBS: ""
+
+permissions:
+  contents: write
+  actions: read
+  packages: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: 解析输入，生成设备矩阵（最多 4 路并行）
+  # ---------------------------------------------------------------------------
+  prepare:
+    name: Prepare matrix
+    runs-on: ubuntu-22.04
+    outputs:
+      source: ${{ steps.inputs.outputs.source }}
+      devices_json: ${{ steps.matrix.outputs.devices_json }}
+      upload_release: ${{ steps.inputs.outputs.upload_release }}
+      release_tag: ${{ steps.inputs.outputs.release_tag }}
+      upstream_commit: ${{ steps.inputs.outputs.upstream_commit }}
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: Resolve workflow inputs
+        id: inputs
+        shell: bash
+        run: |
+          # 兼容 workflow_dispatch / workflow_call / repository_dispatch
+          SOURCE="${{ github.event.inputs.source }}"
+          DEVICE="${{ github.event.inputs.device }}"
+          UPLOAD="${{ github.event.inputs.upload_release }}"
+          TAG="${{ github.event.inputs.release_tag }}"
+          COMMIT="${{ github.event.inputs.upstream_commit }}"
+
+          if [[ -z "$SOURCE" ]]; then
+            SOURCE="${{ github.event.client_payload.source }}"
+          fi
+          if [[ -z "$DEVICE" ]]; then
+            DEVICE="${{ github.event.client_payload.device || 'all' }}"
+          fi
+          if [[ -z "$UPLOAD" ]]; then
+            UPLOAD="${{ github.event.client_payload.upload_release || 'false' }}"
+          fi
+          if [[ -z "$TAG" ]]; then
+            TAG="${{ github.event.client_payload.release_tag || '' }}"
+          fi
+          if [[ -z "$COMMIT" ]]; then
+            COMMIT="${{ github.event.client_payload.upstream_commit || '' }}"
+          fi
+
+          echo "source=${SOURCE:-lede}" >> "$GITHUB_OUTPUT"
+          echo "upload_release=${UPLOAD}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "upstream_commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "device_input=${DEVICE:-all}" >> "$GITHUB_OUTPUT"
+
+      - name: Build device matrix JSON
+        id: matrix
+        shell: bash
+        run: |
+          DEVICE_INPUT="${{ steps.inputs.outputs.device_input }}"
+          DEVICES_JSON="$(bash scripts/resolve-devices.sh "$DEVICE_INPUT")"
+          echo "devices_json=$DEVICES_JSON" >> "$GITHUB_OUTPUT"
+          echo "Matrix devices: $DEVICES_JSON"
+
+  # ---------------------------------------------------------------------------
+  # Job 2: 并行编译（矩阵策略，max-parallel: 4）
+  # ---------------------------------------------------------------------------
+  build:
+    name: "${{ matrix.device }} (${{ needs.prepare.outputs.source }})"
+    needs: prepare
+    runs-on: ubuntu-22.04
+    timeout-minutes: ${{ fromJSON(env.BUILD_TIMEOUT_MINUTES) }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        device: ${{ fromJSON(needs.prepare.outputs.devices_json) }}
+
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Setup feeds, caches, and overlay
+        id: setup
+        uses: ./.github/actions/setup-feeds
+        with:
+          source: ${{ needs.prepare.outputs.source }}
+          device: ${{ matrix.device }}
+          commit: ${{ needs.prepare.outputs.upstream_commit }}
+          feeds_mode: append
+          repo_root: ${{ github.workspace }}
+
+      - name: Determine make parallelism
+        id: jobs
+        shell: bash
+        run: |
+          if [[ -n "${{ env.MAKE_JOBS }}" ]]; then
+            J="${{ env.MAKE_JOBS }}"
+          else
+            # 限制并行度：避免 7GB RAM runner OOM，使用 nproc-1 且上限 8
+            N="$(nproc)"
+            J=$(( N > 1 ? N - 1 : 1 ))
+            [[ $J -gt 8 ]] && J=8
+          fi
+          echo "jobs=$J" >> "$GITHUB_OUTPUT"
+          echo "Using make -j$J"
+
+      - name: Compile firmware
+        shell: bash
+        run: |
+          SOURCE_TREE="${{ steps.setup.outputs.source_tree }}"
+          cd "$SOURCE_TREE"
+          export FORCE=1
+          export IGNORE_ERRORS=m
+          make -j"${{ steps.jobs.outputs.jobs }}" download compile
+
+      - name: Resolve commit short hash
+        id: commit
+        shell: bash
+        run: |
+          SHORT="$(git -C "${{ steps.setup.outputs.source_tree }}" rev-parse --short HEAD)"
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+
+      - name: Pack and upload artifacts
+        uses: ./.github/actions/pack-release
+        with:
+          source_tree: ${{ steps.setup.outputs.source_tree }}
+          source: ${{ needs.prepare.outputs.source }}
+          device: ${{ matrix.device }}
+          commit: ${{ steps.commit.outputs.short }}
+          upload_release: ${{ needs.prepare.outputs.upload_release }}
+          release_tag: ${{ needs.prepare.outputs.release_tag }}
+          repo_root: ${{ github.workspace }}
+
+      - name: Post-build cleanup (save disk for cache upload)
+        if: always()
+        shell: bash
+        run: |
+          SOURCE_TREE="${{ steps.setup.outputs.source_tree }}"
+          # 删除中间 build_dir，保留 bin/ 和 dl/（已在 cache save 中处理）
+          find "$SOURCE_TREE/build_dir" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
+          rm -rf "$SOURCE_TREE/staging_dir" 2>/dev/null || true
+
+  # ---------------------------------------------------------------------------
+  # Job 3: 汇总构建结果
+  # ---------------------------------------------------------------------------
+  summary:
+    name: Build summary
+    needs: [prepare, build]
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Write job summary
+        shell: bash
+        run: |
+          echo "## Build v2 Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Source | ${{ needs.prepare.outputs.source }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Devices | ${{ needs.prepare.outputs.devices_json }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Result | ${{ needs.build.result }} |" >> "$GITHUB_STEP_SUMMARY"

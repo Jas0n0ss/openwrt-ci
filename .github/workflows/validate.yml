@@ -1,0 +1,31 @@
+name: Validate
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate config matrix
+        run: bash scripts/validate-configs.sh
+
+      - name: Validate device matrix JSON
+        run: |
+          json="$(bash scripts/resolve-devices.sh all)"
+          echo "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d)>=1"
+
+      - name: Shellcheck scripts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck
+          shellcheck scripts/*.sh
+
+      - name: YAML syntax
+        run: |
+          sudo apt-get install -y python3-yaml
+          python3 -c "import yaml, pathlib; [yaml.safe_load(p.read_text()) for p in pathlib.Path('.github').rglob('*.yml')]"

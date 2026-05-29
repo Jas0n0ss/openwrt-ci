@@ -1,0 +1,66 @@
+# SDK quick-build — compile a single package against cached toolchain
+#
+# Prerequisite: run a full build-v2 once for the same source+device to populate SDK.
+# Target: finish within ~10 minutes for typical packages.
+
+name: Build SDK Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Source tree
+        required: true
+        default: lede
+        type: choice
+        options:
+          - lede
+          - immortalwrt
+      device:
+        description: Device used for SDK baseline
+        required: true
+        default: x86_64
+        type: string
+      package:
+        description: Package path (e.g. luci-app-passwall)
+        required: true
+        default: luci-app-passwall
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sdk-build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore SDK artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: sdk-${{ github.event.inputs.source }}-${{ github.event.inputs.device }}
+          path: sdk/
+
+      - name: Setup feeds (SDK mode)
+        uses: ./.github/actions/setup-feeds
+        with:
+          source: ${{ github.event.inputs.source }}
+          device: ${{ github.event.inputs.device }}
+          feeds_mode: append
+
+      - name: Build single package
+        shell: bash
+        run: |
+          SOURCE_TREE="${{ github.workspace }}/build/${{ github.event.inputs.source }}"
+          cd "$SOURCE_TREE"
+          make "package/${{ github.event.inputs.package }}/compile" -j"$(nproc)"
+
+      - name: Upload package ipks
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipk-${{ github.event.inputs.package }}-${{ github.run_id }}
+          path: build/${{ github.event.inputs.source }}/bin/packages/**/*.ipk
+          if-no-files-found: warn

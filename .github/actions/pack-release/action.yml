@@ -1,0 +1,95 @@
+name: Pack Release
+description: Package firmware images, generate checksums, upload artifacts or GitHub Release
+
+inputs:
+  source_tree:
+    description: Path to built OpenWrt source tree
+    required: true
+  source:
+    description: Source name (lede or immortalwrt)
+    required: true
+  device:
+    description: Device target name
+    required: true
+  platform:
+    description: Platform slug for image naming
+    required: false
+    default: ""
+  commit:
+    description: Short commit hash for release naming
+    required: true
+  repo_root:
+    description: Path to openwrt-ci repository root
+    required: false
+    default: ${{ github.workspace }}
+  upload_release:
+    description: Upload to GitHub Release (true/false)
+    required: false
+    default: "false"
+  release_tag:
+    description: Release tag (required when upload_release=true)
+    required: false
+    default: ""
+
+outputs:
+  artifact_name:
+    description: Name of uploaded artifact
+    value: ${{ steps.pack.outputs.artifact_name }}
+  output_dir:
+    description: Directory containing packed firmware
+    value: ${{ steps.pack.outputs.output_dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve platform slug
+      id: meta
+      shell: bash
+      run: |
+        PLATFORM="${{ inputs.platform }}"
+        if [[ -z "$PLATFORM" ]]; then
+          PLATFORM="${{ inputs.device }}"
+        fi
+        DATE="$(date -u +%Y%m%d)"
+        ARTIFACT="${{ inputs.source }}-${{ inputs.device }}-${DATE}-${{ inputs.commit }}"
+        echo "platform=$PLATFORM" >> "$GITHUB_OUTPUT"
+        echo "artifact_name=$ARTIFACT" >> "$GITHUB_OUTPUT"
+        echo "release_name=${{ inputs.source }}-${{ inputs.device }}-${DATE}-${{ inputs.commit }}" >> "$GITHUB_OUTPUT"
+
+    - name: Pack firmware images
+      id: pack
+      shell: bash
+      run: |
+        REPO="${{ inputs.repo_root }}"
+        OUT="$REPO/artifacts/${{ steps.meta.outputs.artifact_name }}"
+        rm -rf "$OUT"
+        mkdir -p "$OUT"
+
+        bash "$REPO/scripts/pack-firmware.sh" \
+          "${{ inputs.source_tree }}" \
+          "$OUT" \
+          "${{ inputs.source }}" \
+          "${{ inputs.device }}" \
+          "${{ steps.meta.outputs.platform }}"
+
+        echo "output_dir=$OUT" >> "$GITHUB_OUTPUT"
+        echo "artifact_name=${{ steps.meta.outputs.artifact_name }}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.meta.outputs.artifact_name }}
+        path: ${{ steps.pack.outputs.output_dir }}/*
+        retention-days: 14
+        if-no-files-found: error
+
+    - name: Upload to GitHub Release
+      if: inputs.upload_release == 'true'
+      uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      with:
+        tag_name: ${{ inputs.release_tag }}
+        name: ${{ steps.meta.outputs.release_name }}
+        files: ${{ steps.pack.outputs.output_dir }}/*
+        fail_on_unmatched_files: true

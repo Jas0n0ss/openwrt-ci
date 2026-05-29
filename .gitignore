@@ -1,0 +1,16 @@
+# Build artifacts
+artifacts/
+build/
+*.merged
+
+# OpenWrt checkout trees
+lede/
+immortalwrt/
+
+# Cache / temp
+.ccache/
+.dl-cache/
+*.bak.*
+
+# OS
+.DS_Store

@@ -1,0 +1,10 @@
+# One device target per line. Comments and blank lines are ignored.
+# Used by build-v2.yml matrix generation.
+
+ipq807x
+mt7981
+mt7986
+rtl838x
+rockchip
+x86_64
+bcm27xx

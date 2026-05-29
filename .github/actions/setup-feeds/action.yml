@@ -1,0 +1,213 @@
+name: Setup Feeds
+description: Clone OpenWrt source, restore caches, install custom feeds, and apply overlay
+
+inputs:
+  source:
+    description: Source tree name (lede or immortalwrt)
+    required: true
+  device:
+    description: Device target name
+    required: true
+  commit:
+    description: Upstream commit to checkout (empty = latest)
+    required: false
+    default: ""
+  feeds_mode:
+    description: append or overwrite for custom feeds
+    required: false
+    default: append
+  repo_root:
+    description: Path to openwrt-ci repository root
+    required: false
+    default: ${{ github.workspace }}
+  work_dir:
+    description: Working directory for source checkout
+    required: false
+    default: ${{ github.workspace }}/build
+
+outputs:
+  source_tree:
+    description: Absolute path to checked-out source tree
+    value: ${{ steps.paths.outputs.source_tree }}
+  dl_cache_key:
+    description: Cache key for dl directory
+    value: ${{ steps.cache_keys.outputs.dl_cache_key }}
+  feeds_cache_key:
+    description: Cache key for feeds directory
+    value: ${{ steps.cache_keys.outputs.feeds_cache_key }}
+  ccache_cache_key:
+    description: Cache key for ccache
+    value: ${{ steps.cache_keys.outputs.ccache_cache_key }}
+  config_hash:
+    description: Hash of merged .config for ccache key
+    value: ${{ steps.cache_keys.outputs.config_hash }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve source repository URL
+      id: repo
+      shell: bash
+      run: |
+        case "${{ inputs.source }}" in
+          lede)
+            echo "url=https://github.com/coolsnowwolf/lede.git" >> "$GITHUB_OUTPUT"
+            ;;
+          immortalwrt)
+            echo "url=https://github.com/immortalwrt/immortalwrt.git" >> "$GITHUB_OUTPUT"
+            ;;
+          *)
+            echo "Unknown source: ${{ inputs.source }}" >&2
+            exit 1
+            ;;
+        esac
+
+    - name: Prepare directories
+      id: paths
+      shell: bash
+      run: |
+        WORK_DIR="${{ inputs.work_dir }}"
+        SOURCE_TREE="$WORK_DIR/${{ inputs.source }}"
+        mkdir -p "$WORK_DIR"
+        echo "source_tree=$SOURCE_TREE" >> "$GITHUB_OUTPUT"
+        echo "work_dir=$WORK_DIR" >> "$GITHUB_OUTPUT"
+
+    - name: Checkout upstream source
+      shell: bash
+      run: |
+        SOURCE_TREE="${{ steps.paths.outputs.source_tree }}"
+        URL="${{ steps.repo.outputs.url }}"
+        PIN="${{ inputs.commit }}"
+
+        if [[ -d "$SOURCE_TREE/.git" ]]; then
+          rm -rf "$SOURCE_TREE"
+        fi
+
+        if [[ -n "$PIN" ]]; then
+          git clone --filter=blob:none --no-checkout "$URL" "$SOURCE_TREE"
+          git -C "$SOURCE_TREE" checkout "$PIN"
+        else
+          git clone --depth=1 --branch master "$URL" "$SOURCE_TREE"
+        fi
+        echo "Upstream commit: $(git -C "$SOURCE_TREE" rev-parse HEAD)"
+
+    - name: Install build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends \
+          build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+          gettext git libncurses5-dev libssl-dev python3 python3-distutils \
+          rsync unzip zlib1g-dev file wget curl ccache \
+          libelf-dev libfuse-dev libncurses-dev
+
+    - name: Merge device configuration
+      id: merge_config
+      shell: bash
+      run: |
+        REPO="${{ inputs.repo_root }}"
+        SOURCE="${{ inputs.source }}"
+        DEVICE="${{ inputs.device }}"
+        SOURCE_TREE="${{ steps.paths.outputs.source_tree }}"
+        COMMON="$REPO/configs/$SOURCE/common.config"
+        DEVICE_CFG="$REPO/configs/$SOURCE/$DEVICE.config"
+        PLUGINS="$REPO/configs/custom-plugins.config"
+        MERGED="$SOURCE_TREE/.config.merged"
+
+        for f in "$COMMON" "$DEVICE_CFG" "$PLUGINS"; do
+          if [[ ! -f "$f" ]]; then
+            echo "Missing config fragment: $f" >&2
+            exit 1
+          fi
+        done
+
+        bash "$REPO/scripts/merge-config.sh" "$MERGED" "$COMMON" "$DEVICE_CFG" "$PLUGINS"
+        cp "$MERGED" "$SOURCE_TREE/.config"
+        echo "config_path=$MERGED" >> "$GITHUB_OUTPUT"
+
+    - name: Compute cache keys
+      id: cache_keys
+      shell: bash
+      run: |
+        REPO="${{ inputs.repo_root }}"
+        SOURCE="${{ inputs.source }}"
+        DEVICE="${{ inputs.device }}"
+        SOURCE_TREE="${{ steps.paths.outputs.source_tree }}"
+
+        FEEDS_HASH="$(bash "$REPO/scripts/hash-file.sh" "$SOURCE_TREE/feeds.conf.default")"
+        CONFIG_HASH="$(bash "$REPO/scripts/hash-file.sh" "${{ steps.merge_config.outputs.config_path }}")"
+        DATE="$(date -u +%Y%m%d)"
+
+        echo "dl_cache_key=dl-${SOURCE}-${FEEDS_HASH}" >> "$GITHUB_OUTPUT"
+        echo "feeds_cache_key=feeds-${SOURCE}-${DATE}" >> "$GITHUB_OUTPUT"
+        echo "ccache_cache_key=ccache-${SOURCE}-${DEVICE}-${CONFIG_HASH}" >> "$GITHUB_OUTPUT"
+        echo "config_hash=${CONFIG_HASH}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore dl cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.paths.outputs.source_tree }}/dl
+        key: ${{ steps.cache_keys.outputs.dl_cache_key }}
+        restore-keys: |
+          dl-${{ inputs.source }}-
+
+    - name: Restore feeds cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.paths.outputs.source_tree }}/feeds
+        key: ${{ steps.cache_keys.outputs.feeds_cache_key }}
+        restore-keys: |
+          feeds-${{ inputs.source }}-
+
+    - name: Restore ccache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.ccache
+        key: ${{ steps.cache_keys.outputs.ccache_cache_key }}
+        restore-keys: |
+          ccache-${{ inputs.source }}-${{ inputs.device }}-
+
+    - name: Generate banner and overlay
+      shell: bash
+      run: |
+        REPO="${{ inputs.repo_root }}"
+        COMMIT="$(git -C "${{ steps.paths.outputs.source_tree }}" rev-parse --short HEAD)"
+        bash "$REPO/scripts/generate-banner.sh" "$REPO" "${{ inputs.source }}" "${{ inputs.device }}" "$COMMIT"
+        bash "$REPO/scripts/bundle-oh-my-bash.sh" "$REPO"
+        bash "$REPO/scripts/install-files-overlay.sh" "${{ steps.paths.outputs.source_tree }}" "$REPO"
+
+    - name: Setup custom feeds and packages
+      shell: bash
+      env:
+        SOURCE_NAME: ${{ inputs.source }}
+      run: |
+        bash "${{ inputs.repo_root }}/scripts/setup-custom-packages.sh" \
+          "${{ steps.paths.outputs.source_tree }}" \
+          "${{ inputs.feeds_mode }}"
+
+    - name: Expand merged config with menuconfig helper
+      shell: bash
+      run: |
+        cd "${{ steps.paths.outputs.source_tree }}"
+        make defconfig
+
+    - name: Save dl cache
+      uses: actions/cache/save@v4
+      if: always()
+      with:
+        path: ${{ steps.paths.outputs.source_tree }}/dl
+        key: ${{ steps.cache_keys.outputs.dl_cache_key }}
+
+    - name: Save feeds cache
+      uses: actions/cache/save@v4
+      if: always()
+      with:
+        path: ${{ steps.paths.outputs.source_tree }}/feeds
+        key: ${{ steps.cache_keys.outputs.feeds_cache_key }}
+
+    - name: Save ccache
+      uses: actions/cache/save@v4
+      if: always()
+      with:
+        path: ~/.ccache
+        key: ${{ steps.cache_keys.outputs.ccache_cache_key }}
