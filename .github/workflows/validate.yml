@@ -17,13 +17,17 @@ jobs:
       - name: Validate device matrix JSON
         run: |
           json="$(bash scripts/resolve-devices.sh all)"
-          echo "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d)>=1"
+          echo "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d)==11"
+          pkg="$(bash scripts/resolve-packages.sh all)"
+          echo "$pkg" | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d)>=1"
+          bash scripts/device-platform.sh xiaomi-ax3600 | grep -q ipq807x
 
       - name: Shellcheck scripts
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y shellcheck
           shellcheck scripts/*.sh
+          test -x scripts/collect-ipks.sh
 
       - name: YAML syntax
         run: |

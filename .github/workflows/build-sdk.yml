@@ -1,7 +1,7 @@
-# SDK quick-build — compile a single package against cached toolchain
+# SDK quick-build — compile multiple packages across multiple device platforms
 #
-# Prerequisite: run a full build-v2 once for the same source+device to populate SDK.
-# Target: finish within ~10 minutes for typical packages.
+# Prerequisite: run build-v2 once per source+device to publish SDK artifacts.
+# Falls back to source-tree package compile when SDK artifact is missing.
 
 name: Build SDK Package
 
@@ -16,51 +16,146 @@ on:
         options:
           - lede
           - immortalwrt
-      device:
-        description: Device used for SDK baseline
+      devices:
+        description: Device codenames (all, or comma-separated e.g. x86_64,r2s,xiaomi-ax3600)
         required: true
-        default: x86_64
+        default: all
         type: string
-      package:
-        description: Package path (e.g. luci-app-passwall)
+      packages:
+        description: Packages (all, or comma-separated e.g. luci-app-passwall,luci-app-mosdns)
         required: true
-        default: luci-app-passwall
+        default: all
         type: string
 
 permissions:
   contents: read
 
 jobs:
-  sdk-build:
+  prepare:
+    name: Prepare matrix
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    outputs:
+      source: ${{ steps.inputs.outputs.source }}
+      devices_json: ${{ steps.matrix.outputs.devices_json }}
+      packages_json: ${{ steps.matrix.outputs.packages_json }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve inputs
+        id: inputs
+        shell: bash
+        run: |
+          echo "source=${{ github.event.inputs.source }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build device and package lists
+        id: matrix
+        shell: bash
+        run: |
+          DEVICES_JSON="$(bash scripts/resolve-devices.sh "${{ github.event.inputs.devices }}")"
+          PACKAGES_JSON="$(bash scripts/resolve-packages.sh "${{ github.event.inputs.packages }}")"
+          echo "devices_json=$DEVICES_JSON" >> "$GITHUB_OUTPUT"
+          echo "packages_json=$PACKAGES_JSON" >> "$GITHUB_OUTPUT"
+          echo "Devices: $DEVICES_JSON"
+          echo "Packages: $PACKAGES_JSON"
+
+  sdk-build:
+    name: "${{ matrix.device }} (${{ needs.prepare.outputs.source }})"
+    needs: prepare
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        device: ${{ fromJSON(needs.prepare.outputs.devices_json) }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Restore SDK artifact
+        id: sdk
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          name: sdk-${{ github.event.inputs.source }}-${{ github.event.inputs.device }}
-          path: sdk/
+          name: sdk-${{ needs.prepare.outputs.source }}-${{ matrix.device }}
+          path: ${{ github.workspace }}/sdk-cache/${{ matrix.device }}/
 
-      - name: Setup feeds (SDK mode)
+      - name: Setup source tree and feeds
+        id: setup
         uses: ./.github/actions/setup-feeds
         with:
-          source: ${{ github.event.inputs.source }}
-          device: ${{ github.event.inputs.device }}
+          source: ${{ needs.prepare.outputs.source }}
+          device: ${{ matrix.device }}
           feeds_mode: append
+          repo_root: ${{ github.workspace }}
 
-      - name: Build single package
+      - name: Extract SDK (if available)
+        id: extract
         shell: bash
         run: |
-          SOURCE_TREE="${{ github.workspace }}/build/${{ github.event.inputs.source }}"
-          cd "$SOURCE_TREE"
-          make "package/${{ github.event.inputs.package }}/compile" -j"$(nproc)"
+          CACHE="${{ github.workspace }}/sdk-cache/${{ matrix.device }}"
+          SDK_DIR="${{ github.workspace }}/build/sdk-${{ matrix.device }}"
+          mkdir -p "$SDK_DIR"
+          shopt -s nullglob
+          archives=("$CACHE"/*.tar.xz)
+          if [[ ${#archives[@]} -gt 0 ]]; then
+            tar -xJf "${archives[0]}" -C "$SDK_DIR"
+            ROOT="$(find "$SDK_DIR" -mindepth 1 -maxdepth 1 -type d | head -1)"
+            echo "use_sdk=true" >> "$GITHUB_OUTPUT"
+            echo "tree=$ROOT" >> "$GITHUB_OUTPUT"
+            echo "Using SDK: $ROOT"
+          else
+            echo "use_sdk=false" >> "$GITHUB_OUTPUT"
+            echo "tree=${{ steps.setup.outputs.source_tree }}" >> "$GITHUB_OUTPUT"
+            echo "No SDK artifact — compiling in full source tree"
+          fi
 
-      - name: Upload package ipks
+      - name: Determine make parallelism
+        id: jobs
+        shell: bash
+        run: |
+          N="$(nproc)"
+          J=$(( N > 1 ? N - 1 : 1 ))
+          [[ $J -gt 8 ]] && J=8
+          echo "jobs=$J" >> "$GITHUB_OUTPUT"
+
+      - name: Build packages
+        shell: bash
+        env:
+          PACKAGES_JSON: ${{ needs.prepare.outputs.packages_json }}
+        run: |
+          TREE="${{ steps.extract.outputs.tree }}"
+          JOBS="${{ steps.jobs.outputs.jobs }}"
+          mapfile -t packages < <(python3 -c "import json,os; print('\n'.join(json.loads(os.environ['PACKAGES_JSON'])))")
+          bash scripts/build-packages.sh "$TREE" "$JOBS" "${packages[@]}"
+
+      - name: Collect IPK artifacts
+        id: collect
+        shell: bash
+        run: |
+          OUT="${{ github.workspace }}/artifacts/ipk-${{ needs.prepare.outputs.source }}-${{ matrix.device }}-${{ github.run_id }}"
+          eval "$(bash scripts/collect-ipks.sh "${{ steps.extract.outputs.tree }}" "$OUT")"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
+      - name: Upload IPK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ipk-${{ github.event.inputs.package }}-${{ github.run_id }}
-          path: build/${{ github.event.inputs.source }}/bin/packages/**/*.ipk
+          name: ipk-${{ needs.prepare.outputs.source }}-${{ matrix.device }}-${{ github.run_id }}
+          path: ${{ steps.collect.outputs.dir }}/*
           if-no-files-found: warn
+
+  summary:
+    name: SDK build summary
+    needs: [prepare, sdk-build]
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Write summary
+        shell: bash
+        run: |
+          echo "## SDK Build Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Source | ${{ needs.prepare.outputs.source }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Devices | ${{ needs.prepare.outputs.devices_json }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Packages | ${{ needs.prepare.outputs.packages_json }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Result | ${{ needs.sdk-build.result }} |" >> "$GITHUB_STEP_SUMMARY"

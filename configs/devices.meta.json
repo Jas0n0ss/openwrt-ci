@@ -1,0 +1,57 @@
+{
+  "xiaomi-ax3600": {
+    "label": "小米 AX3600",
+    "platform": "ipq807x",
+    "soc": "qualcommax"
+  },
+  "xiaomi-ax9000": {
+    "label": "小米 AX9000",
+    "platform": "ipq807x",
+    "soc": "qualcommax"
+  },
+  "xiaomi-wr30u": {
+    "label": "小米 WR30U",
+    "platform": "mt7981",
+    "soc": "filogic"
+  },
+  "xiaomi-ax6000": {
+    "label": "小米 AX6000",
+    "platform": "mt7986",
+    "soc": "filogic"
+  },
+  "redmi-ax6000": {
+    "label": "红米 AX6000",
+    "platform": "mt7986",
+    "soc": "filogic"
+  },
+  "phicomm-k2p": {
+    "label": "斐讯 K2P",
+    "platform": "mt7621",
+    "soc": "ramips"
+  },
+  "xiaomi-3g": {
+    "label": "小米路由 3G",
+    "platform": "mt7621",
+    "soc": "ramips"
+  },
+  "xiaomi-cr660x": {
+    "label": "小米 CR660x",
+    "platform": "mt7621",
+    "soc": "ramips"
+  },
+  "r2s": {
+    "label": "NanoPi R2S",
+    "platform": "armv8",
+    "soc": "rockchip"
+  },
+  "x86_64": {
+    "label": "x86_64",
+    "platform": "x86_64",
+    "soc": "x86_64"
+  },
+  "raspberrypi-4b": {
+    "label": "树莓派 4B",
+    "platform": "bcm2711",
+    "soc": "bcm27xx"
+  }
+}

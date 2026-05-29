@@ -218,6 +218,7 @@ jobs:
           echo "short=$SHORT" >> "$GITHUB_OUTPUT"
 
       - name: Pack and upload artifacts
+        id: pack
         uses: ./.github/actions/pack-release
         with:
           source_tree: ${{ steps.setup.outputs.source_tree }}
@@ -227,6 +228,25 @@ jobs:
           upload_release: ${{ needs.prepare.outputs.upload_release }}
           release_tag: ${{ needs.prepare.outputs.release_tag }}
           repo_root: ${{ github.workspace }}
+
+      - name: Export and upload SDK
+        if: success()
+        shell: bash
+        run: |
+          SOURCE_TREE="${{ steps.setup.outputs.source_tree }}"
+          SOURCE="${{ needs.prepare.outputs.source }}"
+          DEVICE="${{ matrix.device }}"
+          SDK_OUT="${{ github.workspace }}/artifacts/sdk-${SOURCE}-${DEVICE}"
+          bash scripts/export-sdk.sh "$SOURCE_TREE" "$SDK_OUT"
+
+      - name: Upload SDK artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-${{ needs.prepare.outputs.source }}-${{ matrix.device }}
+          path: artifacts/sdk-${{ needs.prepare.outputs.source }}-${{ matrix.device }}/*
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Post-build cleanup (save disk for cache upload)
         if: always()

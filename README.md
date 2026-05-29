@@ -2,6 +2,39 @@
 
 Production-grade OpenWrt/LEDE firmware CI for [coolsnowwolf/lede](https://github.com/coolsnowwolf/lede) and [ImmortalWrt](https://github.com/immortalwrt/immortalwrt).
 
+## Device matrix
+
+| 设备 | 代号 | 平台 |
+|------|------|------|
+| 小米 AX3600 | `xiaomi-ax3600` | ipq807x |
+| 小米 AX9000 | `xiaomi-ax9000` | ipq807x |
+| 小米 WR30U | `xiaomi-wr30u` | mt7981 |
+| 小米 AX6000 | `xiaomi-ax6000` | mt7986 |
+| 红米 AX6000 | `redmi-ax6000` | mt7986 |
+| 斐讯 K2P | `phicomm-k2p` | mt7621 |
+| 小米路由 3G | `xiaomi-3g` | mt7621 |
+| 小米 CR660x | `xiaomi-cr660x` | mt7621 |
+| NanoPi R2S | `r2s` | armv8 |
+| x86_64 | `x86_64` | x86_64 |
+| 树莓派 4B | `raspberrypi-4b` | bcm2711 |
+
+Codenames live in `configs/devices.list`; platform slugs in `configs/devices.meta.json`.
+
+## SDK multi-package build
+
+**Actions → Build SDK Package → Run workflow**
+
+| Input | Example |
+|-------|---------|
+| `devices` | `all` or `x86_64,r2s,xiaomi-ax3600` |
+| `packages` | `all` or `luci-app-passwall,luci-app-mosdns` |
+
+- Builds up to **4 devices in parallel**
+- Each device job compiles **all selected packages**
+- Uses SDK artifact from `build-v2` when available; otherwise falls back to source tree
+
+Package list: `configs/packages.list`
+
 ## Quick start (GitHub Actions)
 
 1. Push this repo to GitHub.

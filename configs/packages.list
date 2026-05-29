@@ -1,0 +1,9 @@
+# Packages for SDK quick-build (paths under package/ without prefix)
+luci-app-passwall
+luci-app-passwall2
+luci-app-mosdns
+luci-app-turboacc
+luci-app-ttyd
+luci-theme-aurora
+bash
+bash-completion

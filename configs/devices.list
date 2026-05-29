@@ -1,10 +1,14 @@
-# One device target per line. Comments and blank lines are ignored.
-# Used by build-v2.yml matrix generation.
+# Device codenames — one per line. Must exist in configs/devices.meta.json
+# and have configs/{lede,immortalwrt}/{codename}.config
 
-ipq807x
-mt7981
-mt7986
-rtl838x
-rockchip
+xiaomi-ax3600
+xiaomi-ax9000
+xiaomi-wr30u
+xiaomi-ax6000
+redmi-ax6000
+phicomm-k2p
+xiaomi-3g
+xiaomi-cr660x
+r2s
 x86_64
-bcm27xx
+raspberrypi-4b

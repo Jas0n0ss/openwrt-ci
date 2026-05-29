@@ -46,15 +46,17 @@ runs:
       id: meta
       shell: bash
       run: |
+        REPO="${{ inputs.repo_root }}"
+        DEVICE="${{ inputs.device }}"
         PLATFORM="${{ inputs.platform }}"
         if [[ -z "$PLATFORM" ]]; then
-          PLATFORM="${{ inputs.device }}"
+          PLATFORM="$(bash "$REPO/scripts/device-platform.sh" "$DEVICE" 2>/dev/null || echo "$DEVICE")"
         fi
         DATE="$(date -u +%Y%m%d)"
-        ARTIFACT="${{ inputs.source }}-${{ inputs.device }}-${DATE}-${{ inputs.commit }}"
+        ARTIFACT="${{ inputs.source }}-${DEVICE}-${DATE}-${{ inputs.commit }}"
         echo "platform=$PLATFORM" >> "$GITHUB_OUTPUT"
         echo "artifact_name=$ARTIFACT" >> "$GITHUB_OUTPUT"
-        echo "release_name=${{ inputs.source }}-${{ inputs.device }}-${DATE}-${{ inputs.commit }}" >> "$GITHUB_OUTPUT"
+        echo "release_name=${{ inputs.source }}-${DEVICE}-${DATE}-${{ inputs.commit }}" >> "$GITHUB_OUTPUT"
 
     - name: Pack firmware images
       id: pack
