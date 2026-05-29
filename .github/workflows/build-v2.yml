@@ -80,8 +80,7 @@ concurrency:
 env:
   # GitHub Actions 免费 runner 磁盘约 14GB，预留空间给编译树
   MAX_PARALLEL: "4"
-  BUILD_TIMEOUT_MINUTES: "150"
-  # make 并行度：物理核数，避免 OOM 可下调
+  # make 并行度：物理核数，避免 OOM 可下调（空 = 自动计算）
   MAKE_JOBS: ""
 
 permissions:
@@ -155,7 +154,7 @@ jobs:
     name: "${{ matrix.device }} (${{ needs.prepare.outputs.source }})"
     needs: prepare
     runs-on: ubuntu-22.04
-    timeout-minutes: ${{ fromJSON(env.BUILD_TIMEOUT_MINUTES) }}
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       max-parallel: 4
