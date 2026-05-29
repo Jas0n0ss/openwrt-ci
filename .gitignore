@@ -1,11 +1,10 @@
 # Build artifacts
 artifacts/
 build/
-*.merged
 
-# OpenWrt checkout trees
-lede/
-immortalwrt/
+# OpenWrt checkout trees (top-level only)
+/lede/
+/immortalwrt/
 
 # Cache / temp
 .ccache/
