@@ -27,10 +27,28 @@ on:
           - lede
           - immortalwrt
       device:
-        description: Device target (all = every entry in configs/devices.list)
+        description: >-
+          Device target. all = every device in configs/devices.list.
+          Labels: phicomm-k2p 斐讯 K2P | raspberrypi-4b 树莓派 4B | r2s NanoPi R2S |
+          redmi-ax6000 红米 AX6000 | xiaomi-3g 小米路由 3G | xiaomi-ax3600 小米 AX3600 |
+          xiaomi-ax6000 小米 AX6000 | xiaomi-ax9000 小米 AX9000 | xiaomi-cr660x 小米 CR660x |
+          xiaomi-wr30u 小米 WR30U | x86_64 x86_64
         required: true
-        default: x86_64
-        type: string
+        default: all
+        type: choice
+        options:
+          - all
+          - phicomm-k2p
+          - raspberrypi-4b
+          - r2s
+          - redmi-ax6000
+          - xiaomi-3g
+          - xiaomi-ax3600
+          - xiaomi-ax6000
+          - xiaomi-ax9000
+          - xiaomi-cr660x
+          - xiaomi-wr30u
+          - x86_64
       upload_release:
         description: Upload to GitHub Release
         required: false

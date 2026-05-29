@@ -17,15 +17,40 @@ on:
           - lede
           - immortalwrt
       devices:
-        description: Device codenames (all, or comma-separated e.g. x86_64,r2s,xiaomi-ax3600)
+        description: >-
+          Device platform. all = every device in configs/devices.list (same codenames as build-v2).
         required: true
         default: all
-        type: string
+        type: choice
+        options:
+          - all
+          - phicomm-k2p
+          - raspberrypi-4b
+          - r2s
+          - redmi-ax6000
+          - xiaomi-3g
+          - xiaomi-ax3600
+          - xiaomi-ax6000
+          - xiaomi-ax9000
+          - xiaomi-cr660x
+          - xiaomi-wr30u
+          - x86_64
       packages:
-        description: Packages (all, or comma-separated e.g. luci-app-passwall,luci-app-mosdns)
+        description: Package to build (all = every entry in configs/packages.list)
         required: true
         default: all
-        type: string
+        type: choice
+        options:
+          - all
+          - bash
+          - bash-completion
+          - luci-app-arpbind
+          - luci-app-mosdns
+          - luci-app-passwall
+          - luci-app-passwall2
+          - luci-app-turboacc
+          - luci-app-ttyd
+          - luci-theme-aurora
 
 permissions:
   contents: read
