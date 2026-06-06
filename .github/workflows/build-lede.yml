@@ -1,0 +1,21 @@
+name: Build LEDE
+
+on:
+  workflow_dispatch:
+
+# 一次最多跑一个 LEDE 构建，避免 runner 争抢
+concurrency:
+  group: build-lede
+  cancel-in-progress: false
+
+jobs:
+  lede:
+    uses: ./.github/workflows/_build.yml
+    with:
+      source: lede
+      repo_url: https://github.com/coolsnowwolf/lede.git
+      key_prefix: lede
+      timeout_minutes: 360
+      build_toolchain: false
+    permissions:
+      contents: write

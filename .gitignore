@@ -1,0 +1,20 @@
+# Build outputs
+lede/
+immortalwrt/
+firmware-output/
+*.img
+*.bin
+*.gz
+*.tar
+
+# oh-my-bash (cloned at build time)
+files/root/.oh-my-bash/
+files/root/.bashrc
+
+# Editor
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store

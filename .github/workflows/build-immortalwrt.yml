@@ -1,0 +1,23 @@
+name: Build ImmortalWrt
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 每周日 02:00 UTC (北京时间周日 10:00)
+    - cron: '0 2 * * 0'
+
+concurrency:
+  group: build-immortalwrt
+  cancel-in-progress: false
+
+jobs:
+  immortalwrt:
+    uses: ./.github/workflows/_build.yml
+    with:
+      source: immortalwrt
+      repo_url: https://github.com/immortalwrt/immortalwrt.git
+      key_prefix: iwrt
+      timeout_minutes: 420
+      build_toolchain: true
+    permissions:
+      contents: write

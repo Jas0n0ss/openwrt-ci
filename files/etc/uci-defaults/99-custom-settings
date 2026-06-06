@@ -1,0 +1,46 @@
+#!/bin/sh
+# files/etc/uci-defaults/99-custom-settings
+# 首次启动时执行，配置基础网络和 UI 设置
+# ============================================================
+
+# ----- LAN 地址 -----
+uci -q set network.lan.ipaddr='10.10.10.1'
+uci -q set network.lan.netmask='255.255.255.0'
+
+# ----- DHCP 范围 -----
+uci -q set dhcp.lan.start='100'
+uci -q set dhcp.lan.limit='151'
+uci -q set dhcp.lan.leasetime='12h'
+
+# ----- 时区 -----
+uci -q set system.@system[0].timezone='CST-8'
+uci -q set system.@system[0].zonename='Asia/Shanghai'
+
+# ----- 主机名 -----
+uci -q set system.@system[0].hostname='OpenWrt'
+
+# ----- LuCI 语言 / 主题 -----
+uci -q set luci.main.lang='zh_cn'
+uci -q set luci.main.mediaurlbase='/luci-static/aurora'
+
+# ----- 提交 -----
+uci commit network
+uci commit dhcp
+uci commit system
+uci commit luci
+
+# ----- 默认密码 root/password -----
+# password 的 MD5 crypt 为 $1$$iC.dUsGpxNNJGeOm1dFio/
+# 使用 passwd 工具设置更安全，但在 uci-defaults 阶段通过 shadow 直接写入
+if command -v passwd >/dev/null 2>&1; then
+  echo -e "password\npassword" | passwd root 2>/dev/null || true
+fi
+
+# ----- LuCI 页脚品牌化 -----
+# 覆盖默认页脚链接，只保留源码仓库 + @Jas0n0ss
+FOOTER_FILE="/usr/lib/lua/luci/view/themes/aurora/footer.htm"
+if [ -f "${FOOTER_FILE}" ]; then
+  sed -i 's|<a href=".*">.*</a>||g' "${FOOTER_FILE}" 2>/dev/null || true
+fi
+
+exit 0
